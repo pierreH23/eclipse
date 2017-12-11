@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Phases & Eclipses</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				color: #000;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+
+				background-color: #fff;
+				margin: 0px;
+				overflow: hidden;
+			}
+	
+			#info_top {
+				position: absolute;
+				top: 0px; width: 100%;
+				padding: 5px;
+				color: #FFF;
+			}
+			
+			#info_bot{
+				position: absolute;
+				top: 400px; width: 100%;
+				padding: 5px;
+				color: #FFF;
+			}
+			
+
+			a {
+				color: #0080ff;
+			}
+			
+			#gui { position: absolute; top: 5px; left: 5px }
+
+		</style>
+	</head>
+	<body>
+		<script src="three.min.js"></script> 
+		<script src="TrackballControls.js"></script>
+		<script src="dat.gui.min.js"></script>
+		<div id="container"></div>
+		<div id="info_top">Position camera</div>
+		<div id="info_bot">Position camera</div>
+		
+
+		<script>
+
+			var container;
+			var views, scene, renderer, controls;  
+			var windowWidth, windowHeight;
+			
+			var camera_t_id=3;
+			var camera_b_id=2;
+			var camera_max=4;
+			
+			var param = {
+				rayon_soleil: 1,
+				rayon_lune: 1,
+				rayon_terre: 1,
+				distance_terre_soleil:200,
+				distance_terre_lune:100,
+				inclinaison_axe_terrestre: 1.23,
+				inclinaison_orbite_lunaire: 0.5,
+				vitesse_rotation_terre: 0.1,
+				vitesse_rotation_lune: 1,
+				vitesse_revolution_terre: 1,
+				vitesse_revolution_lune: 5,
+				pause: false,
+				position_lune: 0,
+				position_terre: 0,
+				grilles: true,
+				orbites: true,
+				allongement_orbite_terrestre:1,
+				allongement_orbite_lunaire:1
+			};
+
+			
+			var gui = new dat.GUI({ autoplace: false, width: 500 } );
+			gui.domElement.id = 'gui';
+			var menu = gui.addFolder('Parametres');
+			menu.add(param, "rayon_soleil",0.1,20);
+			menu.add(param, "rayon_lune",0.1,20);
+			menu.add(param, "rayon_terre",0.1,20);
+			menu.add(param, "inclinaison_axe_terrestre",0,1.570);
+			var controller_earth_sun_ellipse=menu.add(param, "allongement_orbite_terrestre",1,10);
+			var controller_earth_sun_distance=menu.add(param, "distance_terre_soleil",1,500);
+			var controller_earth_moon_ellipse=menu.add(param, "allongement_orbite_lunaire",1,10);
+			menu.add(param, "inclinaison_orbite_lunaire",0.1,6.28);
+			var controller_earth_moon_distance=menu.add(param, "distance_terre_lune",1,500);
+			menu.add(param, "vitesse_rotation_terre",0,0.2);
+			menu.add(param, "vitesse_revolution_terre",0,20);
+			menu.add(param, "vitesse_rotation_lune",0,20);
+			menu.add(param, "vitesse_revolution_lune",0,20);
+			var controller=menu.add(param, "pause");
+			menu.add(param, "position_lune",0,1000).listen();
+			menu.add(param, "position_terre",0,1000).listen();
+			menu.add(param, "grilles");
+			menu.add(param, "orbites");
+			
+			controller.onFinishChange(function(value) {
+				param.position_lune=moon_position;
+				param.position_terre=earth_position;
+			});
+			
+			controller_earth_sun_distance.onFinishChange(function(value) {
+				change=true;
+			});
+			
+			controller_earth_moon_distance.onFinishChange(function(value) {
+				change=true;
+			});
+			
+			controller_earth_sun_ellipse.onFinishChange(function(value) {
+				change=true;
+			});
+			
+			controller_earth_moon_ellipse.onFinishChange(function(value) {
+				change=true;
+			});
+			
+			variable_refresh();
+
+			var views = [
+				{
+					left: 0,
+					top: 0,
+					width: 0.5,
+					height: 1.0,
+					background: new THREE.Color( 0, 0, 0 )					
+				},
+				{
+					left: 0.5,
+					top: 0.5,
+					width: 0.5,
+					height: 0.5,
+					background: new THREE.Color( 0.11,0.11,0.11 )		
+				},
+				{
+					left: 0.5,
+					top: 0,
+					width: 0.5,
+					height: 0.5,
+					background: new THREE.Color( 0.09,0.09,0.09)		
+				}
+			];
+
+			init();
+			animate();
+			
+			// ------------------------------------------------------------
+			var earth_radius_factor;
+			var moon_radius_factor;
+			var sun_radius_factor;
+			var earth_ellipse_factor;
+			var moon_ellipse_factor;
+			var earth_obliquity;
+			var moon_obliquity;
+			var moon_orbital_inclination;
+			var earth_rotation_speed;
+			var earth_orbital_speed;
+			var moon_rotation_speed;
+			var moon_orbital_speed;
+			var earth_sun_distance;
+			var earth_moon_distance;
+			var pause;
+			var grids;
+			var orbits;
+			
+			var change=true;
+
+			var sun, earth, moon;
+			var shape, sphere, earth_curve;
+			var distance=1000;
+			var ellipse;
+			var earth_position=1000, moon_position=1000;
+			var manual_earth_position, manual_moon_position;
+			// ------------------------------------------------------------
+			var moon_grid, ecliptic_grid;
+			var geometry, material;
+			var moon_curve, earth_curve;
+			var points;
+			
+			function set_camera(view_id, id) {
+		        var text_zone;
+				var where = new THREE.Vector3();
+				var look = new THREE.Vector3();
+				view=views[view_id];
+			
+				switch(view_id) {
+					case 1:
+						text_zone=info_bot;
+						break;
+					case 2:
+						text_zone=info_top;
+						break;
+				}
+				
+				switch(id) {
+					case 0:
+						where.getPositionFromMatrix( earth.matrixWorld );
+						view.camera.position.set( where.x,where.y,where.z );
+						look.getPositionFromMatrix( moon.matrixWorld );
+						view.camera.lookAt( look.x,look.y,look.z );
+						text_zone.innerHTML="Lune vue de la Terre";
+						break;
+					case 1:
+						where.getPositionFromMatrix( moon.matrixWorld );
+						view.camera.position.set( where.x,where.y,where.z );
+						look.getPositionFromMatrix( earth.matrixWorld );
+						view.camera.lookAt( look.x,look.y,look.z );
+						text_zone.innerHTML="Terre vue de la lune";
+						break;
+					case 2:
+						view.camera.position.set(0,0,-600);
+						view.camera.lookAt( 0,0,0 );
+						text_zone.innerHTML="Vue de dessus";
+						break;
+					case 3:
+						view.camera.position.set(0,400,0);
+						view.camera.lookAt( 0,0,0 );
+ 						text_zone.innerHTML="Vue de cot&eacute;";
+						break;
+				}
+			}
+				
+			function camera_cycle() {
+				set_camera(1,camera_b_id);
+				set_camera(2,camera_t_id);
+			}
+
+			function init() {
+				container = document.getElementById( 'container' );
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.shadowMap.enabled = true;
+				renderer.shadowMap.type = THREE.PCFSoftShadowMap; 
+				container.appendChild( renderer.domElement );
+				
+				for (var ii =  0; ii < views.length; ++ii ) {
+					var view = views[ii];
+					var camera = new THREE.PerspectiveCamera( view.fov, window.innerWidth / window.innerHeight, 1, 10000 );
+					view.camera = camera;
+				}
+				views[0].camera.position.set(0,500,5);
+				views[0].camera.lookAt( 0,0,0 );
+
+				controls = new THREE.TrackballControls( views[0].camera , renderer.domElement);
+
+				controls.rotateSpeed = 5.0;
+				controls.zoomSpeed = 1.2;
+				controls.panSpeed = 0.8;
+				controls.noZoom = false;
+				controls.noPan = false;
+				controls.staticMoving = true;
+				controls.dynamicDampingFactor = 0.3;
+				controls.keys = [ 65, 83, 68 ];
+				controls.addEventListener( 'change', render );
+					
+				scene = new THREE.Scene();
+				
+				var ambientLight = new THREE.AmbientLight(0x555500);
+				scene.add(ambientLight);
+		
+				var light = new THREE.PointLight( 0xffffff,3 );
+				light.castShadow = true;           
+				light.shadow.mapSize.width = 512;  
+				light.shadow.mapSize.height = 512;
+				light.shadow.camera.near = 0.5;      
+				light.shadow.camera.far = 500 ;    
+				light.shadowCameraVisible = false;
+				light.position.x=0;
+				light.position.y=0;
+				light.position.z=0;
+				scene.add( light );
+				
+				// le soleil ...
+				geometry = new THREE.SphereGeometry(8, 32, 32 );
+				texture = THREE.ImageUtils.loadTexture('sun.jpg');
+				material = new THREE.MeshPhongMaterial ({ 
+					map:texture,
+					emissive: 0x888800
+				}); 
+				sun = new THREE.Mesh(geometry, material);
+				sun.position.set(0,0,0);
+				sun.castShadow = false; 
+				sun.receiveShadow = false; 
+				scene.add( sun );
+				
+				// l'helper plan de l'ecliptique
+				ecliptic_grid = new THREE.GridHelper( 2*earth_sun_distance*earth_ellipse_factor, 40, 0x0000ff, 0x808080 );
+				ecliptic_grid.rotation.x = Math.PI / 2;
+				scene.add( ecliptic_grid );
+				
+				// l'orbite terrestre elliptique
+				earth_curve = new THREE.EllipseCurve(
+					0,  0,            
+					earth_sun_distance, earth_sun_distance,     
+					0,  2 * Math.PI,
+					false,            
+					0                 
+				);
+				earth_curve.xRadius=earth_sun_distance*earth_ellipse_factor;
+				earth_curve.yRadius=earth_sun_distance;
+				points = earth_curve.getPoints( 50 );
+				geometry = new THREE.BufferGeometry().setFromPoints( points );
+				material = new THREE.LineBasicMaterial( { color : 0xff0000 } );
+				earth_orbit = new THREE.Line( geometry, material );
+				scene.add(earth_orbit);
+	
+				
+				// la terre
+				geometry = new THREE.SphereGeometry(8, 32, 32 );
+				texture = THREE.ImageUtils.loadTexture('earth.jpg');
+				material = new THREE.MeshPhongMaterial ({ 
+					map: texture
+				}); 
+				earth = new THREE.Mesh(geometry, material);
+				earth.castShadow = true; 
+				earth.receiveShadow = true; 
+				scene.add( earth ); 	
+			
+				
+				// l'objet lune
+				moon_object = new THREE.Object3D();
+				moon_object.castShadow = false; 
+				moon_object.receiveShadow = false; 
+				scene.add(moon_object);
+				
+				// l'helper lunaire
+				moon_grid = new THREE.GridHelper( 2*earth_moon_distance, 10, 0x0000ff, 0x808080 );
+				moon_grid.rotation.x = Math.PI / 2;
+				moon_object.add( moon_grid );
+				moon_grid.visible=true;
+				
+				// l'orbite lunaire
+				moon_curve = new THREE.EllipseCurve(
+					0,  0,            
+					50, 20,          
+					0,  2 * Math.PI, 
+					false,            
+					0                 
+				);
+
+				var points = moon_curve.getPoints( 50 );
+				geometry = new THREE.BufferGeometry().setFromPoints( points );
+				material = new THREE.LineBasicMaterial( { color : 0x00ff00 } );
+				moon_orbit = new THREE.Line( geometry, material );
+				moon_object.rotation.x = Math.PI / 8;
+				moon_object.add(moon_orbit);
+				
+				// la lune
+				geometry = new THREE.SphereGeometry(8, 32, 32 );
+				texture = THREE.ImageUtils.loadTexture('moon.jpg');
+				material = new THREE.MeshLambertMaterial ({ 
+				     map: texture
+				}); 
+				moon = new THREE.Mesh(geometry, material);
+				moon.castShadow = true; 
+				moon.receiveShadow = true; 
+				moon_object.add( moon ); 
+				
+				scene.add(moon_object);
+				
+				camera_cycle();
+				
+				window.addEventListener( 'resize', onWindowResize, false );
+				window.addEventListener("keydown", onDocumentKeyDown, false);
+			}
+			
+			function onDocumentKeyDown(event) {
+				var keyCode = event.code;
+
+				if (keyCode == 'KeyT') {
+					camera_t_id++;
+					if(camera_t_id==camera_max)
+						camera_t_id=0;
+				} 
+				
+				if (keyCode == 'KeyB') {
+					camera_b_id++;
+					if(camera_b_id==camera_max)
+						camera_b_id=0;
+				} 
+				
+				if (keyCode == 'KeyP') {
+					param.pause=!param.pause;
+					param.position_lune=moon_position;
+					param.position_terre=earth_position;
+				} 
+			}
+
+			function onWindowResize() {
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				controls.handleResize();
+				render();
+			}
+
+			function updateSize() {
+				if ( windowWidth != window.innerWidth || windowHeight != window.innerHeight ) {
+					windowWidth  = window.innerWidth;
+					windowHeight = window.innerHeight;
+					renderer.setSize ( windowWidth, windowHeight );
+				}
+			}
+
+			function animate() {
+				render();
+				requestAnimationFrame( animate );
+				controls.update();
+			}
+			
+			function variable_refresh() {
+				earth_radius_factor=param.rayon_terre;
+				moon_radius_factor=param.rayon_lune;
+				sun_radius_factor=param.rayon_soleil;
+				earth_ellipse_factor=param.allongement_orbite_terrestre;
+				moon_ellipse_factor=param.allongement_orbite_lunaire;
+				earth_obliquity=param.inclinaison_axe_terrestre;
+				moon_obliquity=param.inclinaison_orbite_lunaire;
+				moon_orbital_inclination=param.inclinaison_orbite_lunaire;
+				earth_rotation_speed=param.vitesse_rotation_terre;
+				earth_orbital_speed=param.vitesse_revolution_terre;
+				moon_rotation_speed=param.vitesse_rotation_lune;
+				moon_orbital_speed=param.vitesse_revolution_lune;
+				earth_sun_distance=param.distance_terre_soleil;
+				earth_moon_distance=param.distance_terre_lune;
+				manual_earth_position=param.position_terre;
+				manual_moon_position=param.position_lune;
+				pause=param.pause;
+				grids=param.grilles;
+				orbits=param.orbites;
+			}
+
+			function render() {
+
+				updateSize();
+				
+				
+				variable_refresh();
+				
+				if(grids==false) {
+					ecliptic_grid.visible=false;
+					moon_grid.visible=false;
+				}
+				else {
+					moon_grid.visible=true;
+					ecliptic_grid.visible=true;
+				}
+
+				earth.scale.x=earth_radius_factor;
+				earth.scale.y=earth_radius_factor;
+				earth.scale.z=earth_radius_factor;
+				
+				moon.scale.x=moon_radius_factor;
+				moon.scale.y=moon_radius_factor;
+				moon.scale.z=moon_radius_factor;
+				
+				sun.scale.x=sun_radius_factor;
+				sun.scale.y=sun_radius_factor;
+				sun.scale.z=sun_radius_factor;
+				
+				if(orbits==false) {
+					earth_orbit.visible=false;
+					moon_orbit.visible=false;
+				}
+				else {
+					earth_orbit.visible=true;
+					moon_orbit.visible=true;
+				}
+				
+			
+			
+				var pathPosition = earth_curve.getPointAt(earth_position/1000 );
+				earth.position.set( pathPosition.x, pathPosition.y, 0 );
+				moon_object.position.set( pathPosition.x, pathPosition.y, 0 );
+				
+				pathPosition = moon_curve.getPointAt(moon_position/1000 );
+				moon.position.set( pathPosition.x, pathPosition.y, 0 );
+				
+				
+
+				info_top.style.top='20px';
+				info_top.style.left='80px';
+			
+				info_bot.style.top=windowHeight/2+'px';
+				info_bot.style.left='80px';
+				
+				if(param.pause==false) {
+					if(earth_position<0)
+						earth_position=1000;
+					earth_position=earth_position-earth_orbital_speed;
+					
+					if(moon_position<0)
+						moon_position=1000;
+					moon_position=moon_position-moon_orbital_speed;
+				}
+				
+				else {
+					moon_position=manual_moon_position;
+					earth_position=manual_earth_position;
+				}
+				
+				if(change==true) {
+					scene.remove(earth_orbit);
+					earth_orbit.geometry.dispose();
+					earth_orbit.material.dispose();
+					earth_orbit = undefined;
+					material = undefined;
+					geometry = undefined;
+					earth_curve.xRadius=earth_sun_distance*earth_ellipse_factor;
+					earth_curve.yRadius=earth_sun_distance;
+					points = earth_curve.getPoints( 50 );
+					geometry = new THREE.BufferGeometry().setFromPoints( points );
+					material = new THREE.LineBasicMaterial( { color : 0xff0000 } );
+					earth_orbit = new THREE.Line( geometry, material );
+					scene.add(earth_orbit);
+					
+					moon_object.remove(moon_orbit);
+					moon_orbit.geometry.dispose();
+					moon_orbit.material.dispose();
+					moon_orbit = undefined;
+					moon_curve.xRadius=earth_moon_distance*moon_ellipse_factor;
+					moon_curve.yRadius=earth_moon_distance;
+					points = moon_curve.getPoints( 50 );
+					geometry = new THREE.BufferGeometry().setFromPoints( points );
+					material = new THREE.LineBasicMaterial( { color : 0x00ff00 } );
+					moon_orbit = new THREE.Line( geometry, material );
+					moon_object.add(moon_orbit);
+					
+					moon_object.remove( moon_grid );
+					moon_grid = undefined;
+					moon_grid = new THREE.GridHelper( 2*earth_moon_distance*moon_ellipse_factor, 10, 0x0000ff, 0x808080 );
+					moon_grid.rotation.x = Math.PI / 2;
+					moon_object.add( moon_grid );
+					moon_grid.visible=true;
+					
+					scene.remove( ecliptic_grid );
+					ecliptic_grid = undefined;
+					ecliptic_grid = new THREE.GridHelper( 2*earth_sun_distance*earth_ellipse_factor, 40, 0x0000ff, 0x808080 );
+					ecliptic_grid.rotation.x = Math.PI / 2;
+					scene.add( ecliptic_grid );
+				
+					change = false;	
+				}
+			
+				moon_object.rotation.y =moon_obliquity;
+				earth.rotation.x = earth_obliquity+Math.PI;
+				earth.rotation.y-=earth_rotation_speed;
+				camera_cycle();
+				
+				for ( var ii = 0; ii < views.length; ++ii ) {
+
+					var view = views[ii];
+					var camera = view.camera;
+
+					var left   = Math.floor( windowWidth  * view.left );
+					var top    = Math.floor( windowHeight * view.top );
+					var width  = Math.floor( windowWidth  * view.width );
+					var height = Math.floor( windowHeight * view.height );
+
+					renderer.setViewport( left, top, width, height );
+					renderer.setScissor( left, top, width, height );
+					renderer.setScissorTest( true );
+					renderer.setClearColor( view.background );
+
+					camera.aspect = width / height;
+					camera.updateProjectionMatrix();
+
+					renderer.render( scene, camera );
+
+				}
+			
+			}
+
+		</script>
+
+	</body>
+</html>
